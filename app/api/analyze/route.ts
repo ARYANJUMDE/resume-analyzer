@@ -1,3 +1,4 @@
+import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
 
 // Enhanced skill detection patterns
@@ -253,7 +254,7 @@ export async function POST(request: NextRequest) {
     const missingKeywords = getMissingSkills(text, jobDescription)
     const recommendedCourses = getRecommendedCourses(detectedSkills, text)
 
-    // Generate AI analysis
+    // Generate AI analysis using Groq via AI Gateway
     const prompt = `You are an expert resume reviewer and career coach. Analyze this resume thoroughly.
 
 Resume text:
@@ -278,110 +279,125 @@ Be specific, actionable, and constructive. Focus on:
 5. ATS optimization
 ${jobDescription ? "6. Alignment with the provided job description" : ""}`
 
-    // Generate comprehensive rule-based analysis
-    const strengths: string[] = []
-    const weaknesses: string[] = []
-    const improvements: string[] = []
-    
-    // Analyze detected skills
-    if (detectedSkills.length >= 10) {
-      strengths.push("Strong technical skill diversity with " + detectedSkills.length + " skills identified")
-    } else if (detectedSkills.length >= 5) {
-      strengths.push("Good foundational skills present")
-    }
-    
-    // Check for specific skill categories
-    const lowerText = text.toLowerCase()
-    if (skillPatterns.programming.test(lowerText)) {
-      strengths.push("Programming languages clearly listed")
-    } else {
-      weaknesses.push("No programming languages detected - add technical skills if applicable")
-    }
-    
-    if (skillPatterns.frameworks.test(lowerText)) {
-      strengths.push("Modern frameworks and technologies mentioned")
-    }
-    
-    if (skillPatterns.cloud.test(lowerText)) {
-      strengths.push("Cloud/DevOps experience demonstrated")
-    } else {
-      improvements.push("Consider adding cloud platform experience (AWS, Azure, GCP)")
-    }
-    
-    // Check for quantifiable achievements
-    const metricsPattern = /(\d+%|\$[\d,]+|\d+\s*(users?|customers?|projects?|years?|months?|team|people|revenue|sales))/gi
-    const metricsMatches = text.match(metricsPattern)
-    if (metricsMatches && metricsMatches.length >= 3) {
-      strengths.push("Good use of quantifiable metrics (" + metricsMatches.length + " found)")
-    } else {
-      weaknesses.push("Limited quantifiable achievements - add metrics to showcase impact")
-      improvements.push("Transform vague statements into measurable outcomes (e.g., 'Increased efficiency by 30%')")
-    }
-    
-    // Check for action verbs
-    const actionVerbs = [...atsKeywords.tech, ...atsKeywords.general]
-    const actionVerbCount = actionVerbs.filter(verb => lowerText.includes(verb)).length
-    if (actionVerbCount >= 8) {
-      strengths.push("Strong use of action verbs for impact")
-    } else {
-      weaknesses.push("Consider using more action verbs (developed, achieved, led, optimized)")
-    }
-    
-    // Resume structure analysis
-    const hasEducation = /education|degree|university|college|bachelor|master/i.test(text)
-    const hasExperience = /experience|work|employment|position/i.test(text)
-    const hasProjects = /projects?|portfolio/i.test(text)
-    
-    if (hasEducation && hasExperience) {
-      strengths.push("Clear resume structure with key sections")
-    }
-    if (!hasProjects) {
-      improvements.push("Add a projects section to showcase practical applications")
-    }
-    
-    // Job description matching
-    if (jobDescription && missingKeywords.length > 0) {
-      weaknesses.push("Missing " + missingKeywords.length + " keywords from the job description")
-      improvements.push("Incorporate these keywords naturally: " + missingKeywords.slice(0, 3).join(", "))
-    }
-    
-    // Ensure we have enough items
-    if (strengths.length === 0) {
-      strengths.push("Resume content successfully extracted and analyzed")
-    }
-    if (weaknesses.length === 0 && quickTips.length > 0) {
-      weaknesses.push(...quickTips.slice(0, 2))
-    }
-    if (improvements.length === 0 && quickTips.length > 2) {
-      improvements.push(...quickTips.slice(2, 4))
-    }
-    
-    // Calculate overall score
-    const overallScore = Math.round(((basicScore * 0.6 + atsScore * 0.4)) * 10) / 10
-    
-    // Generate summary
-    let summary = ""
-    if (overallScore >= 7) {
-      summary = "Your resume demonstrates strong qualifications with good structure and relevant skills. Focus on adding more quantifiable achievements and ensuring ATS optimization for best results."
-    } else if (overallScore >= 5) {
-      summary = "Your resume has a solid foundation but could benefit from improvements. Consider adding more specific achievements, technical skills, and ensuring all key sections are present."
-    } else {
-      summary = "Your resume needs significant improvements to be competitive. Focus on adding key sections (experience, skills, education), quantifiable achievements, and relevant keywords."
-    }
+    try {
+      const { text: aiResponse } = await generateText({
+        model: "groq/llama-3.3-70b-versatile",
+        prompt,
+        temperature: 0.3,
+        maxTokens: 1500,
+      })
 
-    return NextResponse.json({
-      overallScore: Math.min(Math.max(overallScore, 1), 10),
-      basicScore: Math.round(basicScore * 10) / 10,
-      atsScore: Math.round(atsScore * 10) / 10,
-      strengths: strengths.slice(0, 5),
-      weaknesses: weaknesses.slice(0, 5),
-      improvements: improvements.slice(0, 5),
-      quickTips,
-      recommendedCourses,
-      missingKeywords,
-      detectedSkills,
-      summary,
-    })
+      // Parse AI response
+      const jsonMatch = aiResponse.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) {
+        throw new Error("Invalid AI response format")
+      }
+
+      const aiAnalysis = JSON.parse(jsonMatch[0])
+      
+      // Calculate overall score (weighted average of AI score and basic scores)
+      const aiScore = aiAnalysis.overallScore || 5
+      const overallScore = Math.round(
+        (aiScore * 0.5 + basicScore * 0.3 + atsScore * 0.2) * 10
+      ) / 10
+
+      return NextResponse.json({
+        overallScore: Math.min(Math.max(overallScore, 1), 10),
+        basicScore: Math.round(basicScore * 10) / 10,
+        atsScore: Math.round(atsScore * 10) / 10,
+        strengths: aiAnalysis.strengths || [],
+        weaknesses: aiAnalysis.weaknesses || [],
+        improvements: aiAnalysis.improvements || [],
+        quickTips,
+        recommendedCourses,
+        missingKeywords,
+        detectedSkills,
+        summary: aiAnalysis.summary || "Resume analysis complete.",
+      })
+    } catch (aiError) {
+      console.error("AI analysis error:", aiError)
+      
+      // Fallback to rule-based analysis if AI fails
+      const strengths: string[] = []
+      const weaknesses: string[] = []
+      const improvements: string[] = []
+      
+      const lowerText = text.toLowerCase()
+      
+      if (detectedSkills.length >= 10) {
+        strengths.push("Strong technical skill diversity with " + detectedSkills.length + " skills identified")
+      } else if (detectedSkills.length >= 5) {
+        strengths.push("Good foundational skills present")
+      }
+      
+      if (skillPatterns.programming.test(lowerText)) {
+        strengths.push("Programming languages clearly listed")
+      } else {
+        weaknesses.push("No programming languages detected - add technical skills if applicable")
+      }
+      
+      if (skillPatterns.frameworks.test(lowerText)) {
+        strengths.push("Modern frameworks and technologies mentioned")
+      }
+      
+      if (skillPatterns.cloud.test(lowerText)) {
+        strengths.push("Cloud/DevOps experience demonstrated")
+      } else {
+        improvements.push("Consider adding cloud platform experience (AWS, Azure, GCP)")
+      }
+      
+      const metricsPattern = /(\d+%|\$[\d,]+|\d+\s*(users?|customers?|projects?|years?|months?|team|people|revenue|sales))/gi
+      const metricsMatches = text.match(metricsPattern)
+      if (metricsMatches && metricsMatches.length >= 3) {
+        strengths.push("Good use of quantifiable metrics (" + metricsMatches.length + " found)")
+      } else {
+        weaknesses.push("Limited quantifiable achievements - add metrics to showcase impact")
+        improvements.push("Transform vague statements into measurable outcomes (e.g., 'Increased efficiency by 30%')")
+      }
+      
+      const actionVerbs = [...atsKeywords.tech, ...atsKeywords.general]
+      const actionVerbCount = actionVerbs.filter(verb => lowerText.includes(verb)).length
+      if (actionVerbCount >= 8) {
+        strengths.push("Strong use of action verbs for impact")
+      } else {
+        weaknesses.push("Consider using more action verbs (developed, achieved, led, optimized)")
+      }
+      
+      if (strengths.length === 0) {
+        strengths.push("Resume content successfully extracted and analyzed")
+      }
+      if (weaknesses.length === 0 && quickTips.length > 0) {
+        weaknesses.push(...quickTips.slice(0, 2))
+      }
+      if (improvements.length === 0 && quickTips.length > 2) {
+        improvements.push(...quickTips.slice(2, 4))
+      }
+      
+      const overallScore = Math.round(((basicScore * 0.6 + atsScore * 0.4)) * 10) / 10
+      
+      let summary = ""
+      if (overallScore >= 7) {
+        summary = "Your resume demonstrates strong qualifications with good structure and relevant skills. Focus on adding more quantifiable achievements and ensuring ATS optimization for best results."
+      } else if (overallScore >= 5) {
+        summary = "Your resume has a solid foundation but could benefit from improvements. Consider adding more specific achievements, technical skills, and ensuring all key sections are present."
+      } else {
+        summary = "Your resume needs significant improvements to be competitive. Focus on adding key sections (experience, skills, education), quantifiable achievements, and relevant keywords."
+      }
+
+      return NextResponse.json({
+        overallScore: Math.min(Math.max(overallScore, 1), 10),
+        basicScore: Math.round(basicScore * 10) / 10,
+        atsScore: Math.round(atsScore * 10) / 10,
+        strengths: strengths.slice(0, 5),
+        weaknesses: weaknesses.slice(0, 5),
+        improvements: improvements.slice(0, 5),
+        quickTips,
+        recommendedCourses,
+        missingKeywords,
+        detectedSkills,
+        summary,
+      })
+    }
   } catch (error) {
     console.error("Analysis error:", error)
     return NextResponse.json(
