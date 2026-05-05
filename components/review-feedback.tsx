@@ -37,19 +37,31 @@ export function ReviewFeedback() {
     
     setIsSubmitting(true)
     
-    // Simulate submission delay
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    
-    // In a real app, you'd send this to an API
-    console.log({
-      rating,
-      helpfulAreas: selectedAreas,
-      feedback,
-      timestamp: new Date().toISOString(),
-    })
-    
-    setIsSubmitting(false)
-    setIsSubmitted(true)
+    try {
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          rating,
+          helpfulAreas: selectedAreas,
+          feedback,
+          timestamp: new Date().toISOString(),
+        }),
+      })
+      
+      if (!response.ok) {
+        throw new Error("Failed to submit feedback")
+      }
+      
+      setIsSubmitting(false)
+      setIsSubmitted(true)
+    } catch (error) {
+      console.error("Error submitting feedback:", error)
+      setIsSubmitting(false)
+      alert("Failed to submit feedback. Please try again.")
+    }
   }
 
   if (isSubmitted) {
