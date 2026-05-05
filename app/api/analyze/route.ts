@@ -1,7 +1,6 @@
 import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
-import pdf from "pdf-parse"
-import mammoth from "mammoth"
+import * as mammoth from "mammoth"
 
 // Enhanced skill detection patterns
 const skillPatterns = {
@@ -61,11 +60,22 @@ function extractTextFromTxt(buffer: Buffer): string {
 
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   try {
-    const data = await pdf(buffer)
+    // Dynamic import for pdf-parse to handle ESM compatibility
+    const pdfParse = (await import("pdf-parse")).default
+    const data = await pdfParse(buffer)
     return data.text
   } catch (error) {
     console.error("PDF parsing error:", error)
-    throw new Error("Failed to parse PDF file")
+    // Fallback: try to extract basic text from PDF buffer
+    const textContent = buffer.toString("utf-8")
+    const extractedText = textContent
+      .replace(/[^\x20-\x7E\n\r\t]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+    if (extractedText.length > 100) {
+      return extractedText
+    }
+    throw new Error("Failed to parse PDF file. Please try uploading a .txt or .docx file instead.")
   }
 }
 
