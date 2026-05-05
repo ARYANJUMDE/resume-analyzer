@@ -1,0 +1,362 @@
+import { generateText } from "ai"
+import { NextRequest, NextResponse } from "next/server"
+import pdf from "pdf-parse"
+import mammoth from "mammoth"
+
+// Enhanced skill detection patterns
+const skillPatterns = {
+  programming: /\b(python|java|javascript|typescript|c\+\+|c#|ruby|go|rust|swift|kotlin|php|scala|r\b|matlab|perl|bash|shell|sql|nosql|html|css|sass|less)\b/gi,
+  frameworks: /\b(react|angular|vue|next\.?js|node\.?js|express|django|flask|spring|rails|laravel|asp\.net|fastapi|svelte|nuxt|gatsby|remix)\b/gi,
+  databases: /\b(mysql|postgresql|mongodb|redis|elasticsearch|dynamodb|cassandra|oracle|sql server|sqlite|firebase|supabase|prisma)\b/gi,
+  cloud: /\b(aws|azure|gcp|google cloud|heroku|vercel|netlify|docker|kubernetes|terraform|jenkins|ci\/cd|github actions|gitlab)\b/gi,
+  data: /\b(machine learning|deep learning|ai|artificial intelligence|data science|data analysis|pandas|numpy|tensorflow|pytorch|scikit-learn|keras|nlp|computer vision|big data|hadoop|spark|tableau|power bi)\b/gi,
+  tools: /\b(git|jira|confluence|slack|figma|sketch|adobe|photoshop|illustrator|vs code|intellij|postman|swagger|graphql|rest api)\b/gi,
+  soft: /\b(leadership|communication|teamwork|problem.solving|critical thinking|project management|agile|scrum|time management|presentation|negotiation|mentoring)\b/gi,
+}
+
+// ATS-friendly keywords by industry
+const atsKeywords = {
+  tech: ["developed", "implemented", "architected", "optimized", "deployed", "automated", "integrated", "scaled", "debugged", "maintained"],
+  general: ["achieved", "managed", "led", "improved", "increased", "reduced", "delivered", "collaborated", "analyzed", "created"],
+  metrics: ["revenue", "cost", "efficiency", "performance", "growth", "users", "customers", "team", "projects", "budget"],
+}
+
+// Course recommendations based on skill gaps
+const courseRecommendations: Record<string, string[]> = {
+  programming: [
+    "Complete Python Bootcamp (Udemy) - Master Python programming fundamentals",
+    "JavaScript: Understanding the Weird Parts - Deep dive into JS",
+    "CS50: Introduction to Computer Science (Harvard/edX) - Strong CS foundation",
+  ],
+  frameworks: [
+    "React - The Complete Guide (Udemy) - Modern React with hooks",
+    "Node.js, Express, MongoDB Bootcamp - Full-stack development",
+    "Next.js & React (Academind) - Production-ready applications",
+  ],
+  databases: [
+    "SQL for Data Science (Coursera) - Essential database skills",
+    "MongoDB University - NoSQL database fundamentals",
+    "Database Design (freeCodeCamp) - Database architecture",
+  ],
+  cloud: [
+    "AWS Certified Solutions Architect - Cloud infrastructure",
+    "Docker and Kubernetes: The Complete Guide - Container orchestration",
+    "Terraform Associate Certification - Infrastructure as Code",
+  ],
+  data: [
+    "Machine Learning by Andrew Ng (Coursera) - ML fundamentals",
+    "Deep Learning Specialization (DeepLearning.AI) - Neural networks",
+    "Data Science Professional Certificate (IBM) - Comprehensive data skills",
+  ],
+  soft: [
+    "Learning How to Learn (Coursera) - Meta-learning skills",
+    "Project Management Professional (PMP) Prep - Project leadership",
+    "Technical Writing (Google) - Documentation skills",
+  ],
+}
+
+function extractTextFromTxt(buffer: Buffer): string {
+  return buffer.toString("utf-8")
+}
+
+async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  try {
+    const data = await pdf(buffer)
+    return data.text
+  } catch (error) {
+    console.error("PDF parsing error:", error)
+    throw new Error("Failed to parse PDF file")
+  }
+}
+
+async function extractTextFromDocx(buffer: Buffer): Promise<string> {
+  try {
+    const result = await mammoth.extractRawText({ buffer })
+    return result.value
+  } catch (error) {
+    console.error("DOCX parsing error:", error)
+    throw new Error("Failed to parse DOCX file")
+  }
+}
+
+function detectSkills(text: string): string[] {
+  const detectedSkills = new Set<string>()
+  const lowerText = text.toLowerCase()
+  
+  for (const [, pattern] of Object.entries(skillPatterns)) {
+    const matches = lowerText.match(pattern)
+    if (matches) {
+      matches.forEach(skill => {
+        // Normalize skill names
+        const normalized = skill.charAt(0).toUpperCase() + skill.slice(1).toLowerCase()
+        detectedSkills.add(normalized)
+      })
+    }
+  }
+  
+  return Array.from(detectedSkills).slice(0, 25)
+}
+
+function calculateBasicScore(text: string): { score: number; tips: string[] } {
+  const lowerText = text.toLowerCase()
+  let score = 0
+  const tips: string[] = []
+
+  const checks = {
+    email: { pattern: /\b[\w.-]+@[\w.-]+\.\w+\b/, weight: 1, tip: "Add a professional email address" },
+    phone: { pattern: /(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/, weight: 1, tip: "Include a phone number" },
+    linkedin: { pattern: /linkedin\.com|linkedin/i, weight: 0.5, tip: "Add your LinkedIn profile URL" },
+    github: { pattern: /github\.com|github/i, weight: 0.5, tip: "Include your GitHub profile for tech roles" },
+    education: { pattern: /\b(education|degree|university|college|bachelor|master|phd|diploma)\b/i, weight: 1.5, tip: "Add education details with degree and institution" },
+    experience: { pattern: /\b(experience|work|employment|job|position|role)\b/i, weight: 1.5, tip: "Include detailed work experience section" },
+    skills: { pattern: /\b(skills?|technologies|proficien|expert)\b/i, weight: 1, tip: "Create a clear skills section" },
+    projects: { pattern: /\b(projects?|portfolio)\b/i, weight: 1, tip: "Add projects with measurable outcomes" },
+    summary: { pattern: /\b(summary|objective|about|profile)\b/i, weight: 0.5, tip: "Include a professional summary at the top" },
+    certifications: { pattern: /\b(certifi|license|credential)\b/i, weight: 0.5, tip: "Add relevant certifications" },
+  }
+
+  for (const [key, check] of Object.entries(checks)) {
+    if (check.pattern.test(lowerText)) {
+      score += check.weight
+    } else {
+      tips.push(check.tip)
+    }
+  }
+
+  // Check for action verbs (ATS optimization)
+  const actionVerbs = [...atsKeywords.tech, ...atsKeywords.general]
+  const actionVerbCount = actionVerbs.filter(verb => lowerText.includes(verb)).length
+  score += Math.min(actionVerbCount * 0.1, 1)
+  
+  if (actionVerbCount < 5) {
+    tips.push("Use more action verbs like 'developed', 'achieved', 'led', 'improved'")
+  }
+
+  // Check for metrics/numbers
+  const hasMetrics = /\d+%|\$\d+|\d+ (users?|customers?|team|projects?|years?)/.test(text)
+  if (hasMetrics) {
+    score += 0.5
+  } else {
+    tips.push("Add quantifiable achievements (e.g., 'increased sales by 25%', 'managed team of 5')")
+  }
+
+  return { score: Math.min(score, 10), tips: tips.slice(0, 6) }
+}
+
+function calculateATSScore(text: string): number {
+  const lowerText = text.toLowerCase()
+  let score = 5 // Base score
+  
+  // Check for proper formatting indicators
+  const hasProperSections = /\b(experience|education|skills)\b/i.test(text)
+  if (hasProperSections) score += 1
+  
+  // Check for action verbs
+  const allAtsWords = [...atsKeywords.tech, ...atsKeywords.general, ...atsKeywords.metrics]
+  const atsWordCount = allAtsWords.filter(word => lowerText.includes(word)).length
+  score += Math.min(atsWordCount * 0.15, 2)
+  
+  // Check for clean formatting (no special characters that might confuse ATS)
+  const specialCharCount = (text.match(/[★●◆▪︎►■]/g) || []).length
+  if (specialCharCount < 5) score += 0.5
+  
+  // Check for chronological format indicators
+  const hasDateFormat = /\b(20\d{2}|19\d{2})|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/gi.test(text)
+  if (hasDateFormat) score += 1
+  
+  // Check for contact info
+  const hasContactInfo = /\b[\w.-]+@[\w.-]+\.\w+\b/.test(text) && /\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/.test(text)
+  if (hasContactInfo) score += 0.5
+  
+  return Math.min(Math.max(score, 0), 10)
+}
+
+function getMissingSkills(text: string, jobDescription: string): string[] {
+  const missing: string[] = []
+  const lowerText = text.toLowerCase()
+  const lowerJob = jobDescription.toLowerCase()
+  
+  if (!jobDescription) {
+    // Generic missing skills check
+    const commonTechSkills = ["python", "javascript", "sql", "git", "cloud", "api", "agile"]
+    commonTechSkills.forEach(skill => {
+      if (!lowerText.includes(skill)) {
+        missing.push(skill.charAt(0).toUpperCase() + skill.slice(1))
+      }
+    })
+    return missing.slice(0, 5)
+  }
+  
+  // Extract keywords from job description
+  const jobKeywords = lowerJob.match(/\b[a-z]{3,}\b/g) || []
+  const uniqueJobKeywords = [...new Set(jobKeywords)]
+  
+  // Find keywords in job description that aren't in resume
+  uniqueJobKeywords.forEach(keyword => {
+    if (!lowerText.includes(keyword) && keyword.length > 3) {
+      // Check if it's a meaningful keyword
+      const isSkillWord = Object.values(skillPatterns).some(pattern => pattern.test(keyword))
+      const isActionWord = [...atsKeywords.tech, ...atsKeywords.general].includes(keyword)
+      if (isSkillWord || isActionWord) {
+        missing.push(keyword.charAt(0).toUpperCase() + keyword.slice(1))
+      }
+    }
+  })
+  
+  return missing.slice(0, 8)
+}
+
+function getRecommendedCourses(detectedSkills: string[], text: string): string[] {
+  const lowerText = text.toLowerCase()
+  const recommendations: string[] = []
+  
+  // Identify weak areas
+  const skillAreas = {
+    programming: skillPatterns.programming.test(lowerText),
+    frameworks: skillPatterns.frameworks.test(lowerText),
+    databases: skillPatterns.databases.test(lowerText),
+    cloud: skillPatterns.cloud.test(lowerText),
+    data: skillPatterns.data.test(lowerText),
+    soft: skillPatterns.soft.test(lowerText),
+  }
+  
+  // Recommend courses for areas with fewer skills
+  for (const [area, hasSkills] of Object.entries(skillAreas)) {
+    if (!hasSkills && courseRecommendations[area]) {
+      recommendations.push(courseRecommendations[area][0])
+    }
+  }
+  
+  // If they have skills, recommend advanced courses
+  if (recommendations.length < 3) {
+    if (skillAreas.programming && !skillAreas.cloud) {
+      recommendations.push(courseRecommendations.cloud[0])
+    }
+    if (skillAreas.frameworks && !skillAreas.data) {
+      recommendations.push(courseRecommendations.data[0])
+    }
+  }
+  
+  return recommendations.slice(0, 5)
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const formData = await request.formData()
+    const file = formData.get("file") as File | null
+    const jobDescription = (formData.get("jobDescription") as string) || ""
+
+    if (!file) {
+      return NextResponse.json({ error: "No file provided" }, { status: 400 })
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer())
+    let text = ""
+
+    // Extract text based on file type
+    if (file.name.endsWith(".pdf")) {
+      text = await extractTextFromPdf(buffer)
+    } else if (file.name.endsWith(".docx")) {
+      text = await extractTextFromDocx(buffer)
+    } else {
+      text = extractTextFromTxt(buffer)
+    }
+
+    if (!text.trim()) {
+      return NextResponse.json({ error: "Could not extract text from the file" }, { status: 400 })
+    }
+
+    // Calculate scores
+    const { score: basicScore, tips: quickTips } = calculateBasicScore(text)
+    const atsScore = calculateATSScore(text)
+    const detectedSkills = detectSkills(text)
+    const missingKeywords = getMissingSkills(text, jobDescription)
+    const recommendedCourses = getRecommendedCourses(detectedSkills, text)
+
+    // Generate AI analysis
+    const prompt = `You are an expert resume reviewer and career coach. Analyze this resume thoroughly.
+
+Resume text:
+${text.slice(0, 8000)}
+
+${jobDescription ? `Target Job Description:\n${jobDescription.slice(0, 2000)}` : "No specific job description provided - give general feedback."}
+
+Provide your analysis in the following JSON format (no markdown, just valid JSON):
+{
+  "overallScore": <number 1-10>,
+  "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
+  "weaknesses": ["<weakness 1>", "<weakness 2>", "<weakness 3>"],
+  "improvements": ["<specific improvement 1>", "<specific improvement 2>", "<specific improvement 3>"],
+  "summary": "<2-3 sentence overall assessment>"
+}
+
+Be specific, actionable, and constructive. Focus on:
+1. Content quality and relevance
+2. Structure and formatting
+3. Achievement presentation (metrics, impact)
+4. Skill alignment with market demands
+5. ATS optimization
+${jobDescription ? "6. Alignment with the provided job description" : ""}`
+
+    try {
+      const { text: aiResponse } = await generateText({
+        model: "anthropic/claude-sonnet-4",
+        prompt,
+        temperature: 0.3,
+        maxTokens: 1000,
+      })
+
+      // Parse AI response
+      const jsonMatch = aiResponse.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) {
+        throw new Error("Invalid AI response format")
+      }
+
+      const aiAnalysis = JSON.parse(jsonMatch[0])
+      
+      // Calculate overall score (weighted average)
+      const overallScore = Math.round(
+        (aiAnalysis.overallScore * 0.5 + basicScore * 0.3 + atsScore * 0.2) * 10
+      ) / 10
+
+      return NextResponse.json({
+        overallScore: Math.min(Math.max(overallScore, 1), 10),
+        basicScore: Math.round(basicScore * 10) / 10,
+        atsScore: Math.round(atsScore * 10) / 10,
+        strengths: aiAnalysis.strengths || [],
+        weaknesses: aiAnalysis.weaknesses || [],
+        improvements: aiAnalysis.improvements || [],
+        quickTips,
+        recommendedCourses,
+        missingKeywords,
+        detectedSkills,
+        summary: aiAnalysis.summary || "Resume analysis complete.",
+      })
+    } catch (aiError) {
+      console.error("AI analysis error:", aiError)
+      
+      // Fallback to basic analysis without AI
+      return NextResponse.json({
+        overallScore: Math.round(((basicScore + atsScore) / 2) * 10) / 10,
+        basicScore: Math.round(basicScore * 10) / 10,
+        atsScore: Math.round(atsScore * 10) / 10,
+        strengths: detectedSkills.length > 5 
+          ? ["Good skill diversity detected", "Technical competencies present"]
+          : ["Resume successfully parsed"],
+        weaknesses: quickTips.slice(0, 3),
+        improvements: quickTips.slice(3, 6),
+        quickTips,
+        recommendedCourses,
+        missingKeywords,
+        detectedSkills,
+        summary: "Basic analysis completed. For a more detailed AI-powered review, please try again later.",
+      })
+    }
+  } catch (error) {
+    console.error("Analysis error:", error)
+    return NextResponse.json(
+      { error: "Failed to analyze resume. Please try a different file." },
+      { status: 500 }
+    )
+  }
+}
