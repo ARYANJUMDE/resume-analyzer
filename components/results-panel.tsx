@@ -6,6 +6,7 @@ import { AnalysisSection } from "./analysis-section"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Sparkles, FileCheck } from "lucide-react"
+import { ReviewFeedback } from "./review-feedback"
 
 export interface AnalysisResult {
   overallScore: number
@@ -182,6 +183,9 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
           delay={0.9}
         />
       </div>
+
+      {/* Review Feedback Section */}
+      <ReviewFeedback />
     </motion.div>
   )
 }
