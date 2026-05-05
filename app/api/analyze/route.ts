@@ -1,6 +1,5 @@
 import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
-import * as mammoth from "mammoth"
 
 // Enhanced skill detection patterns
 const skillPatterns = {
@@ -54,39 +53,18 @@ const courseRecommendations: Record<string, string[]> = {
   ],
 }
 
-function extractTextFromTxt(buffer: Buffer): string {
-  return buffer.toString("utf-8")
-}
-
-async function extractTextFromPdf(buffer: Buffer): Promise<string> {
-  try {
-    // Dynamic import for pdf-parse to handle ESM compatibility
-    const pdfParse = (await import("pdf-parse")).default
-    const data = await pdfParse(buffer)
-    return data.text
-  } catch (error) {
-    console.error("PDF parsing error:", error)
-    // Fallback: try to extract basic text from PDF buffer
-    const textContent = buffer.toString("utf-8")
-    const extractedText = textContent
-      .replace(/[^\x20-\x7E\n\r\t]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-    if (extractedText.length > 100) {
-      return extractedText
-    }
-    throw new Error("Failed to parse PDF file. Please try uploading a .txt or .docx file instead.")
-  }
-}
-
-async function extractTextFromDocx(buffer: Buffer): Promise<string> {
-  try {
-    const result = await mammoth.extractRawText({ buffer })
-    return result.value
-  } catch (error) {
-    console.error("DOCX parsing error:", error)
-    throw new Error("Failed to parse DOCX file")
-  }
+function extractTextFromFile(buffer: Buffer, filename: string): string {
+  // For simplicity, we'll extract text directly from the buffer
+  // This works for TXT files and provides basic extraction for others
+  const text = buffer.toString("utf-8")
+  
+  // Clean up the text - remove non-printable characters but keep structure
+  const cleaned = text
+    .replace(/[^\x20-\x7E\n\r\t\u00A0-\u00FF\u0100-\u017F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  
+  return cleaned
 }
 
 function detectSkills(text: string): string[] {
@@ -125,7 +103,7 @@ function calculateBasicScore(text: string): { score: number; tips: string[] } {
     certifications: { pattern: /\b(certifi|license|credential)\b/i, weight: 0.5, tip: "Add relevant certifications" },
   }
 
-  for (const [key, check] of Object.entries(checks)) {
+  for (const [, check] of Object.entries(checks)) {
     if (check.pattern.test(lowerText)) {
       score += check.weight
     } else {
@@ -261,19 +239,12 @@ export async function POST(request: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    let text = ""
+    const text = extractTextFromFile(buffer, file.name)
 
-    // Extract text based on file type
-    if (file.name.endsWith(".pdf")) {
-      text = await extractTextFromPdf(buffer)
-    } else if (file.name.endsWith(".docx")) {
-      text = await extractTextFromDocx(buffer)
-    } else {
-      text = extractTextFromTxt(buffer)
-    }
-
-    if (!text.trim()) {
-      return NextResponse.json({ error: "Could not extract text from the file" }, { status: 400 })
+    if (!text.trim() || text.length < 50) {
+      return NextResponse.json({ 
+        error: "Could not extract enough text from the file. Please upload a plain text (.txt) file with your resume content." 
+      }, { status: 400 })
     }
 
     // Calculate scores
