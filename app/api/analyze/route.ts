@@ -1,5 +1,7 @@
 import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
+import pdfParse from "pdf-parse"
+import mammoth from "mammoth"
 
 // Enhanced skill detection patterns
 const skillPatterns = {
@@ -53,18 +55,46 @@ const courseRecommendations: Record<string, string[]> = {
   ],
 }
 
-function extractTextFromFile(buffer: Buffer, filename: string): string {
-  // For simplicity, we'll extract text directly from the buffer
-  // This works for TXT files and provides basic extraction for others
+async function extractTextFromFile(buffer: Buffer, filename: string): Promise<string> {
+  const lowerFilename = filename.toLowerCase()
+  
+  // Handle PDF files
+  if (lowerFilename.endsWith('.pdf')) {
+    try {
+      const pdfData = await pdfParse(buffer)
+      return pdfData.text || ""
+    } catch (error) {
+      console.error("PDF parsing error:", error)
+      throw new Error("Failed to parse PDF file. Please ensure the PDF is not corrupted or password-protected.")
+    }
+  }
+  
+  // Handle DOCX files
+  if (lowerFilename.endsWith('.docx')) {
+    try {
+      const result = await mammoth.extractRawText({ buffer })
+      return result.value || ""
+    } catch (error) {
+      console.error("DOCX parsing error:", error)
+      throw new Error("Failed to parse DOCX file. Please ensure the file is a valid Word document.")
+    }
+  }
+  
+  // Handle TXT files
+  if (lowerFilename.endsWith('.txt')) {
+    return buffer.toString("utf-8")
+  }
+  
+  // Try to parse as text for unknown formats
   const text = buffer.toString("utf-8")
   
-  // Clean up the text - remove non-printable characters but keep structure
-  const cleaned = text
-    .replace(/[^\x20-\x7E\n\r\t\u00A0-\u00FF\u0100-\u017F]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
+  // Check if it's readable text
+  const readableChars = text.replace(/[^\x20-\x7E\n\r\t]/g, "").length
+  if (readableChars / text.length > 0.8) {
+    return text
+  }
   
-  return cleaned
+  throw new Error("Unsupported file format. Please upload a PDF, DOCX, or TXT file.")
 }
 
 function detectSkills(text: string): string[] {
@@ -228,6 +258,17 @@ function getRecommendedCourses(detectedSkills: string[], text: string): string[]
   return recommendations.slice(0, 5)
 }
 
+// Generate a unique hash for the resume content to ensure different analyses
+function generateResumeHash(text: string): string {
+  let hash = 0
+  for (let i = 0; i < text.length; i++) {
+    const char = text.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash
+  }
+  return Math.abs(hash).toString(36)
+}
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
@@ -239,52 +280,95 @@ export async function POST(request: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const text = extractTextFromFile(buffer, file.name)
-
-    if (!text.trim() || text.length < 50) {
+    
+    let text: string
+    try {
+      text = await extractTextFromFile(buffer, file.name)
+    } catch (extractError) {
       return NextResponse.json({ 
-        error: "Could not extract enough text from the file. Please upload a plain text (.txt) file with your resume content." 
+        error: extractError instanceof Error ? extractError.message : "Failed to extract text from file"
+      }, { status: 400 })
+    }
+
+    // Clean up the extracted text
+    const cleanedText = text
+      .replace(/\s+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+
+    if (!cleanedText || cleanedText.length < 100) {
+      return NextResponse.json({ 
+        error: "Could not extract enough text from the file. The resume appears to be too short or the content could not be read properly. Please ensure your file contains at least 100 characters of content." 
       }, { status: 400 })
     }
 
     // Calculate scores
-    const { score: basicScore, tips: quickTips } = calculateBasicScore(text)
-    const atsScore = calculateATSScore(text)
-    const detectedSkills = detectSkills(text)
-    const missingKeywords = getMissingSkills(text, jobDescription)
-    const recommendedCourses = getRecommendedCourses(detectedSkills, text)
+    const { score: basicScore, tips: quickTips } = calculateBasicScore(cleanedText)
+    const atsScore = calculateATSScore(cleanedText)
+    const detectedSkills = detectSkills(cleanedText)
+    const missingKeywords = getMissingSkills(cleanedText, jobDescription)
+    const recommendedCourses = getRecommendedCourses(detectedSkills, cleanedText)
+    
+    // Generate unique identifier for this resume to ensure varied responses
+    const resumeHash = generateResumeHash(cleanedText)
+    const timestamp = Date.now()
 
     // Generate AI analysis using Groq via AI Gateway
-    const prompt = `You are an expert resume reviewer and career coach. Analyze this resume thoroughly.
+    const prompt = `You are an expert technical resume reviewer and career coach with 15+ years of experience in tech hiring at top companies like Google, Meta, and Amazon. Your task is to provide a thorough, personalized analysis of this specific resume.
 
-Resume text:
-${text.slice(0, 8000)}
+IMPORTANT: This is a unique resume (ID: ${resumeHash}-${timestamp}). Provide analysis specific to THIS candidate's actual experience, skills, and background. Do NOT give generic advice.
 
-${jobDescription ? `Target Job Description:\n${jobDescription.slice(0, 2000)}` : "No specific job description provided - give general feedback."}
+=== RESUME CONTENT ===
+${cleanedText.slice(0, 10000)}
+=== END RESUME ===
 
-Provide your analysis in the following JSON format (no markdown, just valid JSON):
+${jobDescription ? `=== TARGET JOB DESCRIPTION ===\n${jobDescription.slice(0, 3000)}\n=== END JOB DESCRIPTION ===` : "No specific job description provided - give general technical career feedback."}
+
+=== DETECTED SKILLS FROM RESUME ===
+${detectedSkills.join(", ") || "No specific technical skills detected"}
+=== END SKILLS ===
+
+ANALYSIS INSTRUCTIONS:
+1. Carefully read the ENTIRE resume content above
+2. Identify the candidate's specific:
+   - Years of experience and career level
+   - Technical stack and expertise areas
+   - Industry background
+   - Notable achievements or projects
+   - Education and certifications
+3. Provide feedback that references SPECIFIC items from their resume
+4. Be constructive but honest - point out real weaknesses you observe
+5. Tailor advice to their career level (junior vs senior have different needs)
+
+Respond with ONLY valid JSON (no markdown, no code blocks):
 {
-  "overallScore": <number 1-10>,
-  "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
-  "weaknesses": ["<weakness 1>", "<weakness 2>", "<weakness 3>"],
-  "improvements": ["<specific improvement 1>", "<specific improvement 2>", "<specific improvement 3>"],
-  "summary": "<2-3 sentence overall assessment>"
+  "overallScore": <number 1-10 based on resume quality>,
+  "strengths": [
+    "<specific strength referencing actual resume content>",
+    "<another specific strength>",
+    "<third specific strength>"
+  ],
+  "weaknesses": [
+    "<specific weakness you observed in this resume>",
+    "<another specific area needing improvement>",
+    "<third weakness with actionable context>"
+  ],
+  "improvements": [
+    "<specific, actionable improvement for THIS candidate>",
+    "<another specific recommendation>",
+    "<third improvement suggestion>"
+  ],
+  "summary": "<2-3 sentences summarizing this specific candidate's profile, their career level, main strengths, and the most important thing they should focus on to improve their resume>"
 }
 
-Be specific, actionable, and constructive. Focus on:
-1. Content quality and relevance
-2. Structure and formatting
-3. Achievement presentation (metrics, impact)
-4. Skill alignment with market demands
-5. ATS optimization
-${jobDescription ? "6. Alignment with the provided job description" : ""}`
+Remember: Reference ACTUAL content from the resume in your analysis. Do not give generic advice that could apply to anyone.`
 
     try {
       const { text: aiResponse } = await generateText({
         model: "groq/llama-3.3-70b-versatile",
         prompt,
-        temperature: 0.3,
-        maxTokens: 1500,
+        temperature: 0.7, // Increased for more varied responses
+        maxTokens: 2000,
       })
 
       // Parse AI response
@@ -295,8 +379,13 @@ ${jobDescription ? "6. Alignment with the provided job description" : ""}`
 
       const aiAnalysis = JSON.parse(jsonMatch[0])
       
+      // Validate AI response has required fields
+      if (!aiAnalysis.strengths || !aiAnalysis.weaknesses || !aiAnalysis.improvements) {
+        throw new Error("Incomplete AI analysis")
+      }
+      
       // Calculate overall score (weighted average of AI score and basic scores)
-      const aiScore = aiAnalysis.overallScore || 5
+      const aiScore = typeof aiAnalysis.overallScore === 'number' ? aiAnalysis.overallScore : 5
       const overallScore = Math.round(
         (aiScore * 0.5 + basicScore * 0.3 + atsScore * 0.2) * 10
       ) / 10
@@ -305,14 +394,16 @@ ${jobDescription ? "6. Alignment with the provided job description" : ""}`
         overallScore: Math.min(Math.max(overallScore, 1), 10),
         basicScore: Math.round(basicScore * 10) / 10,
         atsScore: Math.round(atsScore * 10) / 10,
-        strengths: aiAnalysis.strengths || [],
-        weaknesses: aiAnalysis.weaknesses || [],
-        improvements: aiAnalysis.improvements || [],
+        strengths: Array.isArray(aiAnalysis.strengths) ? aiAnalysis.strengths.slice(0, 5) : [],
+        weaknesses: Array.isArray(aiAnalysis.weaknesses) ? aiAnalysis.weaknesses.slice(0, 5) : [],
+        improvements: Array.isArray(aiAnalysis.improvements) ? aiAnalysis.improvements.slice(0, 5) : [],
         quickTips,
         recommendedCourses,
         missingKeywords,
         detectedSkills,
         summary: aiAnalysis.summary || "Resume analysis complete.",
+        // Include extracted text length for debugging
+        textLength: cleanedText.length,
       })
     } catch (aiError) {
       console.error("AI analysis error:", aiError)
@@ -322,18 +413,23 @@ ${jobDescription ? "6. Alignment with the provided job description" : ""}`
       const weaknesses: string[] = []
       const improvements: string[] = []
       
-      const lowerText = text.toLowerCase()
+      const lowerText = cleanedText.toLowerCase()
       
       if (detectedSkills.length >= 10) {
-        strengths.push("Strong technical skill diversity with " + detectedSkills.length + " skills identified")
+        strengths.push(`Strong technical skill diversity with ${detectedSkills.length} skills identified including ${detectedSkills.slice(0, 3).join(", ")}`)
       } else if (detectedSkills.length >= 5) {
-        strengths.push("Good foundational skills present")
+        strengths.push(`Good foundational skills present: ${detectedSkills.slice(0, 4).join(", ")}`)
+      } else if (detectedSkills.length > 0) {
+        strengths.push(`Technical skills detected: ${detectedSkills.join(", ")}`)
       }
       
       if (skillPatterns.programming.test(lowerText)) {
-        strengths.push("Programming languages clearly listed")
+        const progMatches = lowerText.match(skillPatterns.programming)
+        if (progMatches) {
+          strengths.push(`Programming expertise: ${[...new Set(progMatches)].slice(0, 4).join(", ")}`)
+        }
       } else {
-        weaknesses.push("No programming languages detected - add technical skills if applicable")
+        weaknesses.push("No programming languages detected - add technical skills if applicable to your role")
       }
       
       if (skillPatterns.frameworks.test(lowerText)) {
@@ -343,13 +439,13 @@ ${jobDescription ? "6. Alignment with the provided job description" : ""}`
       if (skillPatterns.cloud.test(lowerText)) {
         strengths.push("Cloud/DevOps experience demonstrated")
       } else {
-        improvements.push("Consider adding cloud platform experience (AWS, Azure, GCP)")
+        improvements.push("Consider adding cloud platform experience (AWS, Azure, GCP) as it's increasingly required")
       }
       
       const metricsPattern = /(\d+%|\$[\d,]+|\d+\s*(users?|customers?|projects?|years?|months?|team|people|revenue|sales))/gi
-      const metricsMatches = text.match(metricsPattern)
+      const metricsMatches = cleanedText.match(metricsPattern)
       if (metricsMatches && metricsMatches.length >= 3) {
-        strengths.push("Good use of quantifiable metrics (" + metricsMatches.length + " found)")
+        strengths.push(`Good use of quantifiable metrics (${metricsMatches.length} found)`)
       } else {
         weaknesses.push("Limited quantifiable achievements - add metrics to showcase impact")
         improvements.push("Transform vague statements into measurable outcomes (e.g., 'Increased efficiency by 30%')")
@@ -377,9 +473,9 @@ ${jobDescription ? "6. Alignment with the provided job description" : ""}`
       
       let summary = ""
       if (overallScore >= 7) {
-        summary = "Your resume demonstrates strong qualifications with good structure and relevant skills. Focus on adding more quantifiable achievements and ensuring ATS optimization for best results."
+        summary = `Your resume demonstrates strong qualifications with ${detectedSkills.length} skills identified. Focus on adding more quantifiable achievements and ensuring ATS optimization for best results.`
       } else if (overallScore >= 5) {
-        summary = "Your resume has a solid foundation but could benefit from improvements. Consider adding more specific achievements, technical skills, and ensuring all key sections are present."
+        summary = `Your resume has a solid foundation with skills in ${detectedSkills.slice(0, 2).join(" and ") || "various areas"}. Consider adding more specific achievements, technical skills, and ensuring all key sections are present.`
       } else {
         summary = "Your resume needs significant improvements to be competitive. Focus on adding key sections (experience, skills, education), quantifiable achievements, and relevant keywords."
       }
@@ -396,12 +492,13 @@ ${jobDescription ? "6. Alignment with the provided job description" : ""}`
         missingKeywords,
         detectedSkills,
         summary,
+        textLength: cleanedText.length,
       })
     }
   } catch (error) {
     console.error("Analysis error:", error)
     return NextResponse.json(
-      { error: "Failed to analyze resume. Please try a different file." },
+      { error: "Failed to analyze resume. Please try a different file format or ensure the file is not corrupted." },
       { status: 500 }
     )
   }
