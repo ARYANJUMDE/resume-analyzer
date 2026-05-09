@@ -2,6 +2,7 @@ import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
 import { extractRawText } from "mammoth"
 
+// Resume Analysis API - v2.0
 // Enhanced skill detection patterns
 const skillPatterns = {
   programming: /\b(python|java|javascript|typescript|c\+\+|c#|ruby|go|rust|swift|kotlin|php|scala|r\b|matlab|perl|bash|shell|sql|nosql|html|css|sass|less)\b/gi,
