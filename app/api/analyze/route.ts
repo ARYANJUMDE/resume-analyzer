@@ -1,7 +1,6 @@
 import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
-import pdfParse from "pdf-parse"
-import mammoth from "mammoth"
+import * as mammoth from "mammoth"
 
 // Enhanced skill detection patterns
 const skillPatterns = {
@@ -55,17 +54,108 @@ const courseRecommendations: Record<string, string[]> = {
   ],
 }
 
+// Extract text from PDF using regex-based extraction (serverless-compatible)
+function extractTextFromPDF(buffer: Buffer): string {
+  const pdfString = buffer.toString("binary")
+  const textChunks: string[] = []
+  
+  // Method 1: Extract text between BT (Begin Text) and ET (End Text) markers
+  const btEtPattern = /BT[\s\S]*?ET/g
+  const btEtMatches = pdfString.match(btEtPattern) || []
+  
+  for (const match of btEtMatches) {
+    // Extract text from Tj and TJ operators
+    const tjPattern = /\(([^)]*)\)\s*Tj/g
+    let tjMatch
+    while ((tjMatch = tjPattern.exec(match)) !== null) {
+      if (tjMatch[1]) {
+        textChunks.push(decodeEscapedText(tjMatch[1]))
+      }
+    }
+    
+    // Extract text from TJ arrays
+    const tjArrayPattern = /\[(.*?)\]\s*TJ/g
+    let tjArrayMatch
+    while ((tjArrayMatch = tjArrayPattern.exec(match)) !== null) {
+      const arrayContent = tjArrayMatch[1]
+      const stringPattern = /\(([^)]*)\)/g
+      let stringMatch
+      while ((stringMatch = stringPattern.exec(arrayContent)) !== null) {
+        if (stringMatch[1]) {
+          textChunks.push(decodeEscapedText(stringMatch[1]))
+        }
+      }
+    }
+  }
+  
+  // Method 2: Extract from stream content
+  const streamPattern = /stream\s*([\s\S]*?)\s*endstream/g
+  let streamMatch
+  while ((streamMatch = streamPattern.exec(pdfString)) !== null) {
+    const streamContent = streamMatch[1]
+    // Look for readable ASCII text
+    const readableText = streamContent.replace(/[^\x20-\x7E\n\r\t]/g, " ")
+    const words = readableText.match(/[A-Za-z]{2,}/g) || []
+    if (words.length > 5) {
+      textChunks.push(words.join(" "))
+    }
+  }
+  
+  // Method 3: Extract any readable sequences
+  const readablePattern = /[A-Za-z][A-Za-z0-9\s.,;:!?'"@#$%&*()\-+=]{10,}/g
+  const readableMatches = pdfString.match(readablePattern) || []
+  textChunks.push(...readableMatches.filter(m => m.length > 15))
+  
+  // Clean and join extracted text
+  let text = textChunks.join(" ")
+  text = text
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "")
+    .replace(/\\t/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  
+  return text
+}
+
+// Decode escaped characters in PDF text
+function decodeEscapedText(text: string): string {
+  return text
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\\(/g, "(")
+    .replace(/\\\)/g, ")")
+    .replace(/\\\\/g, "\\")
+    .replace(/\\(\d{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)))
+}
+
 async function extractTextFromFile(buffer: Buffer, filename: string): Promise<string> {
   const lowerFilename = filename.toLowerCase()
   
   // Handle PDF files
   if (lowerFilename.endsWith('.pdf')) {
     try {
-      const pdfData = await pdfParse(buffer)
-      return pdfData.text || ""
+      const text = extractTextFromPDF(buffer)
+      if (text && text.length > 50) {
+        return text
+      }
+      
+      // Fallback: Try to extract any readable content
+      const rawText = buffer.toString("binary")
+      const readableText = rawText.replace(/[^\x20-\x7E\n\r\t]/g, " ")
+      const words = readableText.match(/[A-Za-z]{3,}/g) || []
+      
+      if (words.length > 20) {
+        return words.join(" ")
+      }
+      
+      throw new Error("Could not extract readable text from PDF. The PDF might be image-based or encrypted. Please try uploading a DOCX or TXT version.")
     } catch (error) {
-      console.error("PDF parsing error:", error)
-      throw new Error("Failed to parse PDF file. Please ensure the PDF is not corrupted or password-protected.")
+      if (error instanceof Error && error.message.includes("Could not extract")) {
+        throw error
+      }
+      throw new Error("Failed to parse PDF file. Please try uploading a DOCX or TXT file instead.")
     }
   }
   
