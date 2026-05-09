@@ -286,7 +286,7 @@ export async function POST(request: NextRequest) {
     const missingKeywords = getMissingSkills(text, jobDescription)
     const recommendedCourses = getRecommendedCourses(detectedSkills, text)
 
-    // Generate AI analysis using Groq via AI Gateway
+    // Generate AI analysis using Groq
     const prompt = `You are an expert resume reviewer and career coach. Analyze this resume thoroughly.
 
 Resume text:
