@@ -1,5 +1,13 @@
 import { generateText } from "ai"
+import { createGroq } from "@ai-sdk/groq"
 import { NextRequest, NextResponse } from "next/server"
+import pdf from "pdf-parse"
+import mammoth from "mammoth"
+
+// Initialize Groq provider
+const groq = createGroq({
+  apiKey: process.env.GROQ_API_KEY,
+})
 
 // Enhanced skill detection patterns
 const skillPatterns = {
@@ -53,18 +61,43 @@ const courseRecommendations: Record<string, string[]> = {
   ],
 }
 
-function extractTextFromFile(buffer: Buffer, filename: string): string {
-  // For simplicity, we'll extract text directly from the buffer
-  // This works for TXT files and provides basic extraction for others
-  const text = buffer.toString("utf-8")
+async function extractTextFromFile(buffer: Buffer, filename: string): Promise<string> {
+  const lowerFilename = filename.toLowerCase()
   
+  try {
+    // Handle PDF files
+    if (lowerFilename.endsWith(".pdf")) {
+      const pdfData = await pdf(buffer)
+      const text = pdfData.text || ""
+      return cleanText(text)
+    }
+    
+    // Handle DOCX files
+    if (lowerFilename.endsWith(".docx")) {
+      const result = await mammoth.extractRawText({ buffer })
+      return cleanText(result.value || "")
+    }
+    
+    // Handle TXT files
+    if (lowerFilename.endsWith(".txt")) {
+      return cleanText(buffer.toString("utf-8"))
+    }
+    
+    // Fallback: try to extract as text
+    return cleanText(buffer.toString("utf-8"))
+  } catch (error) {
+    console.error("Error extracting text from file:", error)
+    // Fallback to basic text extraction
+    return cleanText(buffer.toString("utf-8"))
+  }
+}
+
+function cleanText(text: string): string {
   // Clean up the text - remove non-printable characters but keep structure
-  const cleaned = text
+  return text
     .replace(/[^\x20-\x7E\n\r\t\u00A0-\u00FF\u0100-\u017F]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-  
-  return cleaned
 }
 
 function detectSkills(text: string): string[] {
@@ -239,7 +272,7 @@ export async function POST(request: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const text = extractTextFromFile(buffer, file.name)
+    const text = await extractTextFromFile(buffer, file.name)
 
     if (!text.trim() || text.length < 50) {
       return NextResponse.json({ 
@@ -281,7 +314,7 @@ ${jobDescription ? "6. Alignment with the provided job description" : ""}`
 
     try {
       const { text: aiResponse } = await generateText({
-        model: "groq/llama-3.3-70b-versatile",
+        model: groq("llama-3.3-70b-versatile"),
         prompt,
         temperature: 0.3,
         maxTokens: 1500,
