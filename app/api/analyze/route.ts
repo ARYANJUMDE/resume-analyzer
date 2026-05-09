@@ -1,7 +1,7 @@
 import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
 
-// Enhanced skill detection patterns
+// Technical Resume Analyzer - Skill detection patterns
 const skillPatterns = {
   programming: /\b(python|java|javascript|typescript|c\+\+|c#|ruby|go|rust|swift|kotlin|php|scala|r\b|matlab|perl|bash|shell|sql|nosql|html|css|sass|less)\b/gi,
   frameworks: /\b(react|angular|vue|next\.?js|node\.?js|express|django|flask|spring|rails|laravel|asp\.net|fastapi|svelte|nuxt|gatsby|remix)\b/gi,
