@@ -1,7 +1,7 @@
 import { generateText } from "ai"
 import { createGroq } from "@ai-sdk/groq"
 import { NextRequest, NextResponse } from "next/server"
-import pdf from "pdf-parse"
+import { extractText } from "unpdf"
 import mammoth from "mammoth"
 
 // Initialize Groq provider
@@ -67,9 +67,8 @@ async function extractTextFromFile(buffer: Buffer, filename: string): Promise<st
   try {
     // Handle PDF files
     if (lowerFilename.endsWith(".pdf")) {
-      const pdfData = await pdf(buffer)
-      const text = pdfData.text || ""
-      return cleanText(text)
+      const { text } = await extractText(buffer)
+      return cleanText(text || "")
     }
     
     // Handle DOCX files
