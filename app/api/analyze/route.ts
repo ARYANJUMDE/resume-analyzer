@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { extractText as extractPdfText } from "unpdf"
 import mammoth from "mammoth"
 
-// Initialize Groq provider
+// Initialize Groq provider with API key
 const groq = createGroq({
   apiKey: process.env.GROQ_API_KEY,
 })
