@@ -1,8 +1,6 @@
 import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
-import mammoth from "mammoth"
-
-// Force rebuild
+import { extractRawText } from "mammoth"
 
 // Enhanced skill detection patterns
 const skillPatterns = {
@@ -164,7 +162,7 @@ async function extractTextFromFile(buffer: Buffer, filename: string): Promise<st
   // Handle DOCX files
   if (lowerFilename.endsWith('.docx')) {
     try {
-      const result = await mammoth.extractRawText({ buffer })
+      const result = await extractRawText({ buffer })
       return result.value || ""
     } catch (error) {
       console.error("DOCX parsing error:", error)
