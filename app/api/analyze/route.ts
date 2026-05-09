@@ -1,6 +1,8 @@
 import { generateText } from "ai"
 import { NextRequest, NextResponse } from "next/server"
-import * as mammoth from "mammoth"
+import mammoth from "mammoth"
+
+// Force rebuild
 
 // Enhanced skill detection patterns
 const skillPatterns = {
